@@ -42,6 +42,8 @@
 ### Once created you can activate the environment by running
 `conda activate pr_env`
 
+### Create the orf12_sam directory
+`mkdir orf12_sam`
 
 ## Run the make command to initialize mrFAST
 
