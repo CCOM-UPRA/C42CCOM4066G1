@@ -37,7 +37,7 @@
 
 ### To create the virtual environment and install the biopython version used in the project run the following command
 
-`bash conda create -n pr_env python=3.6.10 biopython=1.79 `
+`conda create -n pr_env python=3.6.10 biopython=1.79 `
 
 ### Once created you can activate the environment by running
 `conda activate pr_env`
