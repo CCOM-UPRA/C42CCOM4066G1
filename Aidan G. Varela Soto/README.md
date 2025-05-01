@@ -20,3 +20,10 @@ The stackable short flag was removed because in c++ (using our current library) 
 
 ### Variable Name Changes
 Not implemented for now, some variable names currently have typos (such as 'treshold'), and they dont seem to follow a standard...
+
+### Running command (for test cases)
+```
+g++ -std=c++17  "Aidan G. Varela Soto/precision_recall.cpp" -o precision_recall 
+./precision_recall -g genome.fa -f probes.fasta -s sam_dir -c meta_dir -l 1000
+```
+
