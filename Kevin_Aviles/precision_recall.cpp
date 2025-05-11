@@ -7,11 +7,11 @@
 #include <cstdio>
 #include "includes/cxxopts.hpp"
 #include <omp.h>
-// Possibly unnecessary
 #include <fstream>
 
-using std::string, std::vector, std::cout, std::endl;
+using namespace std;
 // This is the consolidated script so far work is still being done on the individual parts 
+// Outline error prone areas for future reference
 
 /*
 Precision & Recall
@@ -84,10 +84,14 @@ int executeCommand(const string command, string &output)
     return pclose(p);
 }
 
+bool fileExists(const std::string& filename) {
+    std::ifstream infile(filename);
+    return infile.good();
+}
 
 
 int main(int argc, char* argv[])
- {
+{
     // Define command line options with descriptions matching the original Bash script flags
     cxxopts::Options options("precision_recall", "Precision and Recall computation script");
 
@@ -164,37 +168,113 @@ int main(int argc, char* argv[])
 
     // Parse threshold range string into integers
     string treshold_range = result["treshold"].as<string>(); // 'treshold' typo kept intentionally for exact match with original Bash script
-    int TresholdStart, TresholdEnd, TresholdStep;
-    std::sscanf(treshold_range.c_str(), "%d,%d,%d", &TresholdStart, &TresholdEnd, &TresholdStep);
+    int ThresholdStart, ThresholdEnd, ThresholdStep;
+    std::sscanf(treshold_range.c_str(), "%d,%d,%d", &ThresholdStart, &ThresholdEnd, &ThresholdStep);
+
 
     // Get SLURM working directory if applicable
     string DIR = get_slurm_dir();
+    string pr_dir = printdir;
+    string temp_output = ""; // we use temp output to extract the results of our execute commands function or the exit status if the command doesn't have a return
 
-    // Simulated outer loop to continue consolidation 
-    for (e = $EditStart; e <= $EditEnd; e += $EditStep)
+    // ##########################################
+    // # Simplify access to parameter variables #
+    // ##########################################
+
+    string GENOME=genome;
+    string FASTAfile=fasta;
+    string SAMfile=sam;
+    string DATA_DIR=meta;
+    int L1Count=l1count;
+
+
+    // ############################################
+    // # Variable declaration for triple for loop #
+    // ############################################
+    // Extracted kmer size from the fasta file
+    executeCommand("wc -L " + FASTAfile + " | sed 's/ .*//'",temp_output);
+    int k = stoi(temp_output); 
+    // Extract and store total number of probes
+    executeCommand("wc -l " + FASTAfile + " | sed 's/ .*//'",temp_output);
+    int MaxKmers = stoi(temp_output) / 2;
+    // As best F1 scores are obtained using more than 50% of the probes, run tests using 50% to 100% of probes
+    int MinKmers = MaxKmers / 2;
+    // Avoid using only 1 probe from 1 ORF in case there are only 2 probes
+    if (MinKmers < 2){
+        MinKmers = 2;
+    }
+    // Backup of original MaxKmers & MinKmers value to be reset with each edit distance
+    int OriginalMaxKmers=MaxKmers;
+    int OriginalMinKmers=MinKmers;
+    // Keep track of F1 score to only store values in best_F1_history.csv when an improvement is registered in a given kmer size
+    int maxF1=0;
+    // Delete the file if it exists (clears it before any writing happens)
+    // Clear output files before initial run
+    string allF1filename = pr_dir + "/" + std::to_string(k) + "mers_F1Scores.csv";
+    string bestF1filename = pr_dir + "/" + to_string(k) + "mers_best_F1_history.csv";
+    std::remove(allF1filename.c_str());
+    std::remove(bestF1filename.c_str());
+    
+    // We want to use execute command function for this
+    executeCommand("mkdir -p "+ pr_dir, temp_output);
+
+    std::ofstream bestF1File(pr_dir + "/" + to_string(k) + "mers_best_F1_history.csv");
+    std::ofstream allF1File(pr_dir + "/" + to_string(k) + "mers_F1Scores.csv");
+
+    std::string header = "K-mer size\tEdit dist\tThreshold\tK-mers min\tPrecision\tRecall\tF1 Score\n";
+    bestF1File << header; // Add header to bestF1 file
+    allF1File << header; // Add header to allF1 file
+
+    bestF1File.close();
+    allF1File.close();
+
+
+        // Since genome only has to be indexed once we check before entering the for loop if it is indexed
+        // Check if genome is indexed if not then index it
+    if (!fileExists(GENOME + ".index")) 
     {
-        // Seccion de Giovanni
-
-        int runCommand(const string command, string &output)
-
-        FILE *p;
-        int ch;
-
-        p = popen(command.c_str(), "r");
-        if (p == NULL)
-        {
-            puts("Unable to open process");
-            return 1;
-        }
-
-        while ((ch = fgetc(p)) != EOF)
-            output += ch;
-
-        return pclose(p);
+        executeCommand("mrfast-master/mrfast --index " + GENOME, temp_output);
+    }
 
 
-        // Using predetermined threshold values to see the effect on the P&R
-        for(int t=ThresholdStart; t<ThresholdEnd; t+=ThresholdStep)
+    
+    
+
+    // #################################################################################################
+    // # Vary edit distance (e), threshold(t) and ammount of probes used (m) to see effect on F1 Score # 
+    // #################################################################################################
+
+    // Discuss in the next meeting
+    // Currently I am only parallelizing the outermost loop because each time we execute L1PD the sam file
+    // MUST exist beforehand and this way I can ensure the sam file is properly generated for each loop
+    // This implementation is best if the main bottleneck is the mrfast execution and we have a large edit distance
+    // Additionally the other implementation (tasks) doesn't help with I/O and command line execution which
+    // is mostly what our inner loops consist of so it will not be explored for now
+
+    //Try running wihtout the parallellization to see if thats what causing us issues
+    #pragma omp parallel for
+    for (int e = EditStart; e <= EditEnd; e += EditStep)
+    {
+        // Add the edit distance to the name of the same file to avoid data race conditions
+        std::string samFile_loop = SAMfile + "_" + std::to_string(e); // sam file doesn't end with.sam currently (fix it)
+        std::string loop_out = ""; // Since this loop is parallelized we should use a different output variable to avoid overwriting 
+        std::string k_loop = std::to_string(k);
+        double maxF1=0.0;
+        // Generate sam file for current edit distance ensure name is unique for each edit distance to avoid 
+
+        // Is the sam file generated for mrfast unique for each edi distance or is it a single file for all??
+        std::string searchCmd = "mrfast-master/mrfast --search " + GENOME + " --seq " + FASTAfile + " -e " + std::to_string(e) + " -o " + samFile_loop;
+        executeCommand(searchCmd, loop_out);
+
+        // Reset variables
+        int MaxKmers = OriginalMaxKmers;
+        int MinKmers = OriginalMinKmers;
+        int BestM = 0;
+        double BestMF1 = 0;
+        
+
+        
+        for(int t=ThresholdStart; t<=ThresholdEnd; t+=ThresholdStep)
         {
             // Generate the CSV file with the established values
             // A file is created with "ofstream outFile" using the values from the for loops
@@ -205,6 +285,7 @@ int main(int argc, char* argv[])
             {
                 // Writing the header of the file
                 outFile<<"K-mers min\tPatterns\tTrue +\tFalse +\tFalse -\tPrecision\tRecall\tF1 Score\n";
+            }
 
         // #######################################################################################################
 		// #                                       MinKmer Runtime Reducer                                       #
@@ -218,42 +299,47 @@ int main(int argc, char* argv[])
             string strE = to_string(e);
             string strT = to_string(t);
             string strM = to_string(m);
-    
+            // Use critical to avoid data race conditions
+            #pragma omp critical
+            {
             cout << "edit " << strE << ", threshold " << strT << ", MinKmers " << strM << endl;
-    
+            cout<<"MinKmers: "<<MinKmers<<endl;
+            cout<<"MaxKmers"<<MaxKmers<<endl;
+            }
             string rawfilename = "L1s_raw_e" + strE + "_t" + strT + "_m" + strM + ".csv";
             string filteredfilename = "L1s_filtered_e" + strE + "_t" + strT + "_m" + strM + ".csv";
-    
+            
             // Generate a CSV with possible L1s
-            executePythonScript(DIR + "/L1PD_files/L1PD.py", SAMfile + " " + FASTAfile + " -t " + strT + " -m " + strM + " --data_dir " + DATA_DIR + " --csvoutput > " + pr_dir + "/" + rawfilename, true);
-    
+            executePythonScript(DIR + "/L1PD_files/L1PD.py", samFile_loop + " " + FASTAfile + " -t " + strT + " -m " + strM + " --data_dir " + DATA_DIR + " --csvoutput > " + pr_dir + "/" + rawfilename, true);
+            
             // Compare possible L1s from L1PD against L1s from L1Base2 to filter L1s with no matches
             executePythonScript(DIR + "/precision_recall_files/filter_possible_L1s_CSV.py", pr_dir + "/" + rawfilename + " " + FASTAfile + " -t " + strT + " --data_dir " + DATA_DIR + " > " + pr_dir + "/" + filteredfilename, true);
-    
+            
             // Use wc t get line count, with sed's help to remove trailing file name
             // Line counts correspond to Positives and True Positives.
             // cambiar por grep (maybe)
-            string output = "";
-            executeCommand("wc -l " + pr_dir + "/" + rawfilename + " | sed 's/ .*//'", output);
-            int PatCount = stoi(output);
+            
+            executeCommand("wc -l " + pr_dir + "/" + rawfilename + " | sed 's/ .*//'", loop_out);
+            int PatCount = stoi(loop_out);
+            
     
             if (PatCount > 0)
             {
                 // True positives, false positives, and false negatives
-                executeCommand("grep -v '^DUPLICATE' " + pr_dir + "/" + filteredfilename + " | wc -l | sed 's/ .*//'", output);
-    
-                int TPCount = stoi(output);
+                executeCommand("grep -v '^DUPLICATE' " + pr_dir + "/" + filteredfilename + " | wc -l | sed 's/ .*//'", loop_out);
+                
+                int TPCount = stoi(loop_out);
                 int FPCount = PatCount - TPCount;
                 int FNCount = L1Count - TPCount;
     
                 // We assume the file with full-length intact L1s has 'FLI-L1'
                 // in its name (upper or lower case).
-                executeCommand("grep -Fci 'FLI-L1' " + pr_dir + "/" + filteredfilename, output);
-                int FLIL1sFound = stoi(output);
+                executeCommand("grep -Fci 'FLI-L1' " + pr_dir + "/" + filteredfilename, loop_out);
+                int FLIL1sFound = stoi(loop_out);
     
                 // Calculate precision, recall, and F1 Score.
-                float precision = TPCount / PatCount;
-                float recall = TPCount / L1Count;
+                float precision = static_cast<float>(TPCount) / PatCount;
+                float recall = static_cast<float>(TPCount) / L1Count;
                 float F1Score = 2 * precision * recall / (precision + recall);
     
                 string strPatCount = to_string(PatCount);
@@ -281,31 +367,46 @@ int main(int argc, char* argv[])
                 ofstream bestmOutfile(pr_dir + "/results_e" + strE + "_t" + strT + ".csv");
     
                 if (bestmOutfile.is_open())
+                {
                     bestmOutfile << strM + "\t" + strPatCount + "\t" + strTPCount + "\t" + strFPCount + "\t" + strFNCount + "\t" + strPrecision + "\t" + strRecall + "\t" + strF1Score + "\n";
-    
+                }
                 // If current run is part of real runs or only 2 probes are availible (no need to run test run)
                 if (MinKmers == MaxKmers)
                 {
-                    // Store all F1 scores with their respectively used parameters
-                    ofstream bestmOutfile(pr_dir + "/" + k + "mers_F1Scores.csv");
-    
-                    if (bestmOutfile.is_open())
-                        bestmOutfile << k + "\t" + strE + "\t" + strT + "\t" + strM + "\t" + strPrecision + "\t" + strRecall + "\t" + strF1Score + "\n";
-    
-                    if (F1Score > maxF1)
+                    
+                    // When writing to files with the same name we want to avoid data race conditions so we 
+                    // wrap it in an omp critical 
+                    #pragma omp critical
                     {
-                        // Stores only F1 scores that show improvement in a given kmer value
-                        ofstream bestF1Outfile(pr_dir + "/" + k + "mers_best_F1_history.csv");
-    
-                        if (bestF1Outfile.is_open())
-                        {
-                            bestF1Outfile << k + "\t" + strE + "\t" + strT + "\t" + strM + "\t" + strPrecision + "\t" + strRecall + "\t" + strF1Score + "\n";
+                        // Store all F1 scores with their respectively used parameters
+                        // ofstream bestmOutfile(pr_dir + "/" + k_loop + "mers_F1Scores.csv");
+                        
+                        string filename = pr_dir + "/" + k_loop + "mers_F1Scores.csv";
+                        // Check if the file already exists and isn't empty
+                        std::ofstream F1Outfile(filename, std::ios::app); // always appends after deletion
+                        if (!F1Outfile.is_open()) {
+                            std::cerr << "Failed to open file for appending: " << filename << std::endl;
                         }
-    
-                        // Stores current best F1 score to be used in if statmement comparison
-                        maxF1 = F1Score;
+        
+                        if (F1Outfile.is_open())
+                        {
+                            F1Outfile << k_loop + "\t" + strE + "\t" + strT + "\t" + strM + "\t" + strPrecision + "\t" + strRecall + "\t" + strF1Score + "\n";
+                        }
+                        if (F1Score > maxF1)
+                        {
+                            // Stores only F1 scores that show improvement in a given kmer value
+                            ofstream bestF1Outfile(pr_dir + "/" + k_loop + "mers_best_F1_history.csv", std::ios::app);
+        
+                            if (bestF1Outfile.is_open())
+                            {
+                                bestF1Outfile << k_loop + "\t" + strE + "\t" + strT + "\t" + strM + "\t" + strPrecision + "\t" + strRecall + "\t" + strF1Score + "\n";
+                            }
+        
+                            // Stores current best F1 score to be used in if statmement comparison
+                            maxF1 = F1Score;
+                        }
+                            
                     }
-    
                     // As best m value has been selected, skip process of selecting best m value below
                     break;
                 }
@@ -327,14 +428,17 @@ int main(int argc, char* argv[])
                     emptyPatCountOutfile << "PatCount = 0";
             }
         }
+            if (MinKmers != MaxKmers)
+            {
+                t = t - ThresholdStep;
+                MinKmers = BestM;
+                MaxKmers = BestM;
             }
-        }
 
-
-
-
-
-
+            }
     }
+
+
     return 0;
 }
+    
